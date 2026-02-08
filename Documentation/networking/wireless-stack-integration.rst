@@ -61,6 +61,291 @@ Key Components
 3. **mac80211**: Generic software implementation of IEEE 802.11 MAC layer
 4. **Wireless Drivers**: Hardware-specific drivers
 
+Userspace to Wireless Transmission Path
+========================================
+
+How Applications Send Data Over Wireless
+-----------------------------------------
+
+When a userspace application sends network data that ultimately gets transmitted
+via wireless signal, it flows through multiple layers from the C library (glibc)
+down to the wireless hardware. Understanding this complete path is essential for
+comprehending the full integration story.
+
+Socket Creation via glibc
+--------------------------
+
+Applications use standard POSIX socket APIs provided by the C library (glibc),
+which wraps Linux system calls:
+
+1. **Application calls socket() from glibc**::
+
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+   This glibc function is a thin wrapper around the socket system call.
+
+2. **glibc invokes the socket() system call**
+   
+   The C library makes a system call transition to kernel space, invoking
+   ``SYSCALL_DEFINE3(socket, ...)`` defined in ``net/socket.c``.
+
+3. **Kernel creates socket structure**::
+
+    // In net/socket.c
+    SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
+    {
+        return __sys_socket(family, type, protocol);
+    }
+
+   The kernel:
+   
+   * Allocates a ``struct socket`` and ``struct sock``
+   * Associates it with the appropriate protocol family (e.g., AF_INET for IPv4)
+   * Creates a file descriptor for userspace to reference the socket
+   * Returns the file descriptor to userspace
+
+Data Transmission Path
+-----------------------
+
+Once a socket is created and connected, data transmission follows this path:
+
+**Userspace Layer (glibc)**::
+
+    // Application code
+    ssize_t bytes_sent = send(sockfd, buffer, length, 0);
+    // or
+    ssize_t bytes_sent = sendto(sockfd, buffer, length, 0, &dest_addr, addr_len);
+
+1. **glibc send/sendto wrapper**
+   
+   Performs parameter validation and invokes the appropriate system call
+   (``sendto`` or ``sendmsg``).
+
+**Kernel Socket Layer**::
+
+    SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len, ...)
+
+2. **System call handler** (``net/socket.c``)
+   
+   * Validates file descriptor and retrieves socket structure
+   * Copies data from userspace to kernel space
+   * Invokes socket's sendmsg operation
+
+**Transport Layer (TCP/UDP)**::
+
+    // net/ipv4/tcp.c or net/ipv4/udp.c
+    tcp_sendmsg() or udp_sendmsg()
+
+3. **Transport protocol processing**
+   
+   * For TCP: segments data, manages sequence numbers, handles retransmission
+   * For UDP: creates UDP header with ports
+   * Creates ``struct sk_buff`` (socket buffer) containing the packet
+
+**Network Layer (IP)**::
+
+    // net/ipv4/ip_output.c
+    ip_queue_xmit() or ip_send_skb()
+
+4. **IP layer processing**
+   
+   * Adds IP header (source/destination addresses, TTL, protocol)
+   * Performs routing lookup to determine output interface
+   * Handles fragmentation if needed
+   * Passes packet to network device layer
+
+**Network Device Layer**::
+
+    // net/core/dev.c
+    dev_queue_xmit()
+
+5. **Device transmission queue**
+   
+   * Determines output network device (e.g., wlan0)
+   * Applies traffic control (QoS) policies
+   * Invokes device driver's transmit function
+
+**Wireless Stack Processing**
+
+For wireless interfaces, the packet now enters the wireless-specific layers:
+
+6. **mac80211 processing** (for softmac devices)::
+
+    // net/mac80211/tx.c
+    ieee80211_subif_start_xmit()
+
+   * Adds 802.11 MAC header (BSSID, sequence numbers)
+   * Handles encryption (WPA2/WPA3) if configured
+   * Performs rate control (selects transmission rate)
+   * Handles aggregation (A-MSDU/A-MPDU)
+   * Fragments if packet exceeds MTU
+
+7. **Driver TX callback**::
+
+    // drivers/net/wireless/.../driver.c
+    driver_ops.tx()
+
+   * Converts packet to hardware-specific format
+   * Programs hardware DMA registers
+   * Adds packet to hardware TX queue
+
+**Hardware Layer**
+
+8. **Wireless hardware**
+   
+   * Generates OFDM/DSSS waveforms
+   * Applies forward error correction
+   * Modulates signal onto RF carrier
+   * Transmits via antenna as electromagnetic waves
+
+Complete Flow Diagram
+----------------------
+
+::
+
+    [Application]
+         |
+         | socket(), send()
+         v
+    [glibc - C Library]
+         |
+         | System call (syscall)
+         v
+    [Kernel: net/socket.c]
+         | SYSCALL_DEFINE3(socket, ...)
+         | SYSCALL_DEFINE6(sendto, ...)
+         v
+    [Transport Layer: TCP/UDP]
+         | tcp_sendmsg() / udp_sendmsg()
+         | Creates sk_buff
+         v
+    [Network Layer: IP]
+         | ip_queue_xmit()
+         | Adds IP header, routing
+         v
+    [Device Layer: net/core/dev.c]
+         | dev_queue_xmit()
+         v
+    [Wireless: mac80211]
+         | ieee80211_subif_start_xmit()
+         | Adds 802.11 header, encryption
+         v
+    [Wireless Driver]
+         | driver_ops.tx()
+         | Programs hardware
+         v
+    [Wireless Hardware]
+         | RF transmission
+         v
+    [Air: Electromagnetic Waves]
+
+Receive Path: Wireless to Application
+--------------------------------------
+
+The receive path works in reverse:
+
+1. **Wireless hardware** receives RF signal, demodulates to digital data
+2. **Driver RX interrupt handler** retrieves packet from hardware
+3. **mac80211 RX processing** (``ieee80211_rx()``):
+   
+   * Removes 802.11 header
+   * Decrypts if encrypted
+   * Reassembles fragments
+   * Converts to standard ethernet format
+
+4. **Network stack** (``netif_rx()``):
+   
+   * IP layer processes packet
+   * Transport layer (TCP/UDP) delivers to socket
+
+5. **Socket buffer** holds data for application
+6. **Application calls recv/recvfrom** via glibc::
+
+    ssize_t bytes_read = recv(sockfd, buffer, length, 0);
+
+7. **Kernel copies data** from socket buffer to userspace buffer
+8. **Application processes received data**
+
+Key System Calls for Socket Operations
+---------------------------------------
+
+The following system calls (wrapped by glibc) are fundamental to socket
+operations that ultimately use wireless transmission:
+
+**Socket Creation and Setup**:
+    * ``socket()`` - Create a socket endpoint
+    * ``bind()`` - Bind socket to local address
+    * ``connect()`` - Connect to remote address (TCP)
+    * ``listen()`` - Listen for connections (TCP server)
+    * ``accept()`` - Accept incoming connection (TCP server)
+
+**Data Transmission**:
+    * ``send()`` / ``sendto()`` - Send data
+    * ``sendmsg()`` - Send message with control data
+    * ``write()`` / ``writev()`` - Write data to socket
+
+**Data Reception**:
+    * ``recv()`` / ``recvfrom()`` - Receive data
+    * ``recvmsg()`` - Receive message with control data
+    * ``read()`` / ``readv()`` - Read data from socket
+
+**Socket Options**:
+    * ``setsockopt()`` / ``getsockopt()`` - Set/get socket options
+    * ``ioctl()`` - Device-specific operations
+
+Integration with Wireless Configuration
+----------------------------------------
+
+While data transmission uses standard socket APIs, wireless-specific
+configuration (connecting to networks, scanning, etc.) uses different
+mechanisms:
+
+* **Configuration tools** (iw, wpa_supplicant) use **nl80211** (netlink)
+* **Legacy tools** may use **wireless extensions** (deprecated)
+* **Network managers** typically use nl80211 via libnl
+
+Example: Complete Data Flow
+----------------------------
+
+Here's what happens when an application sends a UDP packet over WiFi::
+
+    // Application code
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in dest;
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(8080);
+    dest.sin_addr.s_addr = inet_addr("192.168.1.100");
+    
+    char *msg = "Hello, wireless world!";
+    sendto(sock, msg, strlen(msg), 0, 
+           (struct sockaddr*)&dest, sizeof(dest));
+
+**Kernel Processing**:
+
+1. ``sendto`` syscall → ``net/socket.c``
+2. UDP layer adds header → ``net/ipv4/udp.c``
+3. IP layer adds header and routes → ``net/ipv4/ip_output.c``
+4. Packet queued to wlan0 → ``net/core/dev.c``
+5. mac80211 adds 802.11 header → ``net/mac80211/tx.c``
+6. Encryption applied (WPA2/WPA3)
+7. Driver sends to hardware → ``drivers/net/wireless/.../driver.c``
+8. Hardware transmits RF signal
+
+The response follows the reverse path, eventually reaching the application's
+``recvfrom()`` call.
+
+Impact on Driver Development
+-----------------------------
+
+Understanding this complete path helps driver developers:
+
+* **Optimize packet handling**: Minimize latency between ``dev_queue_xmit()``
+  and actual transmission
+* **Implement proper queueing**: Handle multiple priority queues for QoS
+* **Support hardware offloads**: Checksum calculation, TSO, etc.
+* **Debug connectivity issues**: Trace packets through each layer
+* **Implement power management**: Coordinate with upper layers for sleep states
+
 The cfg80211 Subsystem
 =======================
 
