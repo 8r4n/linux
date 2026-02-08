@@ -602,7 +602,7 @@ This creates virtual radios that can communicate with each other, useful for:
 * Protocol analysis
 * Teaching and demonstrations
 
-See `Documentation/networking/mac80211_hwsim/` for details.
+See :doc:`mac80211_hwsim/mac80211_hwsim` for detailed documentation.
 
 Debugging Tools
 ---------------
@@ -703,8 +703,11 @@ References and Further Reading
 Kernel Documentation
 --------------------
 
-* `Documentation/driver-api/80211/` - Comprehensive API documentation
-* `Documentation/networking/regulatory.rst` - Regulatory framework
+* :doc:`/driver-api/80211/index` - Comprehensive API documentation
+* :doc:`regulatory` - Regulatory framework details
+* :doc:`mac80211-auth-assoc-deauth.txt` - Authentication/association flows
+* :doc:`mac80211-injection` - Packet injection with mac80211
+* :doc:`radiotap-headers` - Radiotap header format
 * `include/net/cfg80211.h` - cfg80211 API and documentation
 * `include/net/mac80211.h` - mac80211 API and documentation
 
