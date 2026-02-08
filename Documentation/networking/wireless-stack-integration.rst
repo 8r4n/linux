@@ -193,7 +193,7 @@ For wireless interfaces, the packet now enters the wireless-specific layers:
 
 8. **Wireless hardware**
    
-   * Generates OFDM/DSSS waveforms
+   * Generates waveforms (OFDM for modern standards, DSSS for legacy 802.11b)
    * Applies forward error correction
    * Modulates signal onto RF carrier
    * Transmits via antenna as electromagnetic waves
@@ -316,7 +316,7 @@ Here's what happens when an application sends a UDP packet over WiFi::
     dest.sin_port = htons(8080);
     dest.sin_addr.s_addr = inet_addr("192.168.1.100");
     
-    char *msg = "Hello, wireless world!";
+    const char *msg = "Hello, wireless world!";
     sendto(sock, msg, strlen(msg), 0, 
            (struct sockaddr*)&dest, sizeof(dest));
 
