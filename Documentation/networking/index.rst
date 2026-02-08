@@ -73,6 +73,7 @@ Contents:
    l2tp
    lapb-module
    mac80211-injection
+   wireless-stack-integration
    mctp
    mpls-sysctl
    mptcp
